@@ -1,0 +1,104 @@
+name: Frontend Continuous Deployment
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "starter/frontend/**"
+      - ".github/workflows/frontend-cd.yaml"
+
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: starter/frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: "starter/frontend/.nvmrc"
+          cache: npm
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+  test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: starter/frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: "starter/frontend/.nvmrc"
+          cache: npm
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test -- --watchAll=false
+        env:
+          CI: true
+
+  build:
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build frontend Docker image
+        run: |
+          docker build \
+            --build-arg REACT_APP_MOVIE_API_URL=http://ad38c5425819b4e83bb7ef7faf6515fe-607639721.us-east-1.elb.amazonaws.com \
+            -t 777891433453.dkr.ecr.us-east-1.amazonaws.com/frontend:${{ github.sha }} \
+            starter/frontend
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push frontend image
+        run: |
+          docker push 777891433453.dkr.ecr.us-east-1.amazonaws.com/frontend:${{ github.sha }}
+
+      - name: Update Kubernetes deployment
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name cluster
+
+          kubectl set image deployment/frontend \
+            frontend=777891433453.dkr.ecr.us-east-1.amazonaws.com/frontend:${{ github.sha }}
+
+          kubectl rollout status deployment/frontend
